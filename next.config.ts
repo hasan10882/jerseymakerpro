@@ -1,8 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   eslint: {
-    ignoreDuringBuilds: false, // 👈 ensures ESLint runs
-  },
+    ignoreDuringBuilds: false // Set to true if you want to skip ESLint in production
+  }
 };
 
-module.exports = nextConfig;
+export default nextConfig;
