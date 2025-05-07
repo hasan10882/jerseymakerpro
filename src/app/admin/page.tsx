@@ -1,21 +1,21 @@
-
 "use client";
 
 import { useEffect, useRef, useState } from "react";
 import { onAuthStateChanged, getIdTokenResult } from "firebase/auth";
-import { CSVLink } from "react-csv";
+import Papa from "papaparse";
 import { Pie } from "react-chartjs-2";
 import ReactToPrint from "react-to-print";
 import {
   Chart as ChartJS,
   ArcElement,
   Tooltip,
-  Legend
+  Legend,
 } from "chart.js";
 
 ChartJS.register(ArcElement, Tooltip, Legend);
 
-const SHEET_API_URL = "https://v1.nocodeapi.com/hasan10882/google_sheets/XqEwfbmmhMrXOA...UAH?tabId=MyOrders";
+const SHEET_API_URL =
+  "https://v1.nocodeapi.com/hasan10882/google_sheets/XqEwfbmmhMrXOA...UAH?tabId=MyOrders";
 
 export default function AdminDashboard() {
   const [user, setUser] = useState<any>(null);
@@ -27,13 +27,14 @@ export default function AdminDashboard() {
   const [lastUpdated, setLastUpdated] = useState("");
   const summaryRef = useRef<HTMLDivElement>(null);
 
+  // Auth + admin-claim check
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(async (loggedInUser) => {
-      if (loggedInUser) {
-        const tokenResult = await getIdTokenResult(loggedInUser, true);
-        if (tokenResult.claims.admin) {
+    const unsub = onAuthStateChanged(async (u) => {
+      if (u) {
+        const token = await getIdTokenResult(u, true);
+        if (token.claims.admin) {
+          setUser(u);
           setIsAdmin(true);
-          setUser(loggedInUser);
         } else {
           alert("Access denied. Admins only.");
           window.location.href = "/";
@@ -41,49 +42,50 @@ export default function AdminDashboard() {
       }
       setLoading(false);
     });
-    return () => unsubscribe();
+    return () => unsub();
   }, []);
 
+  // Fetch orders once we know they're an admin
   useEffect(() => {
     if (!user || !isAdmin) return;
 
     fetch(SHEET_API_URL)
-      .then((res) => res.json())
+      .then((r) => r.json())
       .then((data) => {
         setOrders(data.data || []);
         setLastUpdated(new Date().toLocaleString());
       })
-      .catch((err) => {
-        console.error("Failed to fetch orders", err);
-      });
+      .catch((err) => console.error("Failed to fetch orders", err));
   }, [user, isAdmin]);
 
-  const handleStatusChange = async (index: number, newStatus: string) => {
-    const rowId = index + 2;
-    const payload = {
-      row: rowId,
-      cell: "G",
-      value: newStatus,
-    };
-
+  // Handle status change
+  const handleStatusChange = async (i: number, newStatus: string) => {
+    const payload = { row: i + 2, cell: "G", value: newStatus };
     try {
-      const res = await fetch(`${SHEET_API_URL}`, {
+      const res = await fetch(SHEET_API_URL, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-
-      if (!res.ok) throw new Error("Failed to update status");
-
-      const updatedOrders = [...orders];
-      updatedOrders[index][6] = newStatus;
-      setOrders(updatedOrders);
+      if (!res.ok) throw new Error();
+      const next = [...orders];
+      next[i][6] = newStatus;
+      setOrders(next);
       setLastUpdated(new Date().toLocaleString());
-    } catch (err) {
-      console.error("Update error:", err);
+    } catch {
       alert("Failed to update status");
     }
   };
+
+  // Filters & summary
+  const filteredOrders = orders
+    .filter((o) => statusFilter === "All" || o[6] === statusFilter)
+    .filter((o) =>
+      [o[1], o[2], o[4]]
+        .some((field) =>
+          field?.toLowerCase().includes(searchQuery.toLowerCase())
+        )
+    );
 
   const summary = {
     total: orders.length,
@@ -110,38 +112,41 @@ export default function AdminDashboard() {
     ],
   };
 
-  const filteredOrders = orders
-    .filter((o) => statusFilter === "All" || o[6] === statusFilter)
-    .filter((o) =>
-      [o[1], o[2], o[4]].some((val) =>
-        val?.toLowerCase().includes(searchQuery.toLowerCase())
-      )
-    );
+  // CSV download helper
+  const downloadCSV = (data: any[]) => {
+    const rows = data.map((o) => ({
+      firebaseEmail: o[0],
+      name:          o[1],
+      email:         o[2],
+      address:       o[3],
+      items:         o[4],
+      date:          o[5],
+      status:        o[6] || "Pending",
+    }));
+    const csvBlob = Papa.unparse(rows);
+    const blob = new Blob([csvBlob], { type: "text/csv;charset=utf-8;" });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement("a");
+    a.href     = url;
+    a.download = `orders-${new Date().toISOString()}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  };
 
-  const exportData = filteredOrders.map((o) => ({
-    email: o[0],
-    name: o[1],
-    customerEmail: o[2],
-    address: o[3],
-    cart: o[4],
-    date: o[5],
-    status: o[6],
-  }));
-
-  if (loading) {
-    return <main className="p-6">Checking admin access...</main>;
-  }
-
-  if (!user || !isAdmin) {
+  if (loading) return <main className="p-6">Checking admin access…</main>;
+  if (!user || !isAdmin)
     return <main className="p-6 text-red-500">Access Denied.</main>;
-  }
 
   return (
     <main className="p-4 sm:p-6 space-y-6">
+      {/* Header & print */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h1 className="text-2xl font-bold">Admin Dashboard</h1>
-          <p className="text-sm text-gray-500">Last Updated: {lastUpdated}</p>
+          <p className="text-sm text-gray-500">
+            Last Updated: {lastUpdated}
+          </p>
         </div>
         <ReactToPrint
           trigger={() => (
@@ -153,6 +158,7 @@ export default function AdminDashboard() {
         />
       </div>
 
+      {/* Summary + chart */}
       <div ref={summaryRef}>
         <div className="text-sm bg-white p-4 rounded shadow space-y-1 max-w-md">
           <p><strong>Total Orders:</strong> {summary.total}</p>
@@ -166,6 +172,7 @@ export default function AdminDashboard() {
         </div>
       </div>
 
+      {/* Filters & CSV Export */}
       <div className="flex flex-col sm:flex-row gap-3">
         <select
           value={statusFilter}
@@ -187,17 +194,19 @@ export default function AdminDashboard() {
           className="border px-2 py-1 rounded w-full sm:w-64"
         />
 
-        <CSVLink
-          data={exportData}
-          filename={`orders-${new Date().toISOString()}.csv`}
+        <button
+          onClick={() => downloadCSV(filteredOrders)}
           className="bg-blue-600 text-white px-3 py-1 rounded text-sm hover:bg-blue-700"
         >
           Export CSV
-        </CSVLink>
+        </button>
       </div>
 
+      {/* Orders list */}
       {filteredOrders.length === 0 ? (
-        <p className="text-sm text-gray-500">No matching orders found.</p>
+        <p className="text-sm text-gray-500">
+          No matching orders found.
+        </p>
       ) : (
         filteredOrders.map((order, i) => (
           <div
@@ -209,25 +218,34 @@ export default function AdminDashboard() {
             <p><strong>Email:</strong> {order[2]}</p>
             <p><strong>Address:</strong> {order[3]}</p>
             <p><strong>Items:</strong> {order[4]}</p>
-            <p><strong>Date:</strong> {new Date(order[5]).toLocaleString()}</p>
+            <p>
+              <strong>Date:</strong>{" "}
+              {new Date(order[5]).toLocaleString()}
+            </p>
 
             <div className="mt-2 flex items-center gap-2">
               <label><strong>Status:</strong></label>
               <span
-  className={`inline-block px-2 py-1 text-xs rounded font-semibold ${
-    (order[6] === "Pending" && "bg-yellow-100 text-yellow-800") ||
-    (order[6] === "Processing" && "bg-blue-100 text-blue-800") ||
-    (order[6] === "Shipped" && "bg-green-100 text-green-800") ||
-    (order[6] === "Delivered" && "bg-purple-100 text-purple-800") ||
-    "bg-gray-200 text-gray-700"
-  }`}
->
+                className={`inline-block px-2 py-1 text-xs rounded font-semibold ${
+                  order[6] === "Pending"
+                    ? "bg-yellow-100 text-yellow-800"
+                    : order[6] === "Processing"
+                    ? "bg-blue-100 text-blue-800"
+                    : order[6] === "Shipped"
+                    ? "bg-green-100 text-green-800"
+                    : order[6] === "Delivered"
+                    ? "bg-purple-100 text-purple-800"
+                    : "bg-gray-200 text-gray-700"
+                }`}
+              >
                 {order[6] || "Pending"}
               </span>
 
               <select
                 value={order[6] || "Pending"}
-                onChange={(e) => handleStatusChange(i, e.target.value)}
+                onChange={(e) =>
+                  handleStatusChange(i, e.target.value)
+                }
                 className="ml-auto border px-2 py-1 rounded"
               >
                 <option value="Pending">Pending</option>
